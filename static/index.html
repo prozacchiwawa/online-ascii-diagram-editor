@@ -1,0 +1,36 @@
+<html>
+    <head>
+        <title>Picture Mode</title>
+        <style>
+         * { padding: none; margin: none; box-sizing: border-box; }
+
+         body {
+             font-family: monospace;
+         }
+
+         #mousecover {
+             position: absolute;
+             left: 0;
+             top: 0;
+             width: 100vw;
+             height: 100vh;
+             z-index: 2;
+         }
+
+         #ruler-container {
+             display: flex;
+             flex-direction: row;
+         }
+
+         .dwg-row {
+             height: 15px;
+             flex-grow: 0;
+             margin: 0;
+         }
+        </style>
+    </head>
+    <body>
+        <div id="app"> </div>
+        <script src="picmode.js"></script>
+    </body>
+</html>

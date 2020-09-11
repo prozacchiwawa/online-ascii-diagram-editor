@@ -1,0 +1,21 @@
+{
+  "name": "picmode",
+  "version": "0.1.0",
+  "scripts": {
+    "clean": "bsb -clean-world",
+    "build": "bsb -make-world",
+    "watch": "bsb -make-world -w"
+  },
+  "keywords": [
+    "BuckleScript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "bs-platform": "^7.0.1"
+  },
+  "dependencies": {
+    "browserify": "^16.5.2",
+    "bucklescript-tea": "^0.15.0"
+  }
+}
