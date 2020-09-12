@@ -6,12 +6,12 @@
 
          body {
              font-family: monospace;
+             margin: 0;
          }
 
          #mousecover {
              position: absolute;
              left: 0;
-             top: 0;
              width: 100vw;
              height: 100vh;
              z-index: 2;
@@ -22,10 +22,25 @@
              flex-direction: row;
          }
 
+         #ruler {
+             margin: 0;
+         }
+
          .dwg-row {
              height: 15px;
              flex-grow: 0;
              margin: 0;
+         }
+
+         #controls {
+             display: flex;
+             flex-direction: row;
+             margin: 0;
+         }
+
+         .control {
+             margin-left: 15px;
+             cursor: pointer;
          }
         </style>
     </head>

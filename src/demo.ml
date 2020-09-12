@@ -37,53 +37,146 @@ type state =
   ; shapes : shape IntMap.t
   ; serial : int
   ; mouseAction : move option
+  ; selectedForTyping : int
   }
 
-let finishClick x y model = model
+let ptInsideRect x y = function
+  | Rectangle r ->
+    let withinX = r.left <= x && (r.left + r.width) >= x in
+    let withinY = r.top <= y && (r.top + r.height) >= y in
+    withinX && withinY
+
+let findRects x y model =
+  model.shapes
+  |> IntMap.bindings
+  |> List.filter
+    (function
+      | (_,Rectangle r) -> ptInsideRect x y (Rectangle r)
+    )
 
 let findRect x y model =
-  let found =
-    model.shapes
-    |> IntMap.bindings
-    |> List.filter
-      (function
-        | (_,Rectangle r) ->
-          let _ = Js.log r in
-          let _ = Js.log (x,y) in
-          let withinX = r.left <= x && (r.left + r.width) > x in
-          let withinY = r.top <= y && (r.top + r.height) > y in
-          let _ = Js.log withinX in
-          let _ = Js.log withinY in
-          withinX && withinY
-      )
-  in
-  let _ = Js.log found in
-  match found with
+  match findRects x y model with
   | (nm,shape) :: _ -> Some (nm,shape)
   | _ -> None
 
+let overlappingShapes box model =
+  match box with
+  | Rectangle b ->
+    let bright = b.left + b.width in
+    let bbottom = b.top + b.height in
+    let found =
+      model.shapes
+      |> IntMap.bindings
+      |> List.filter
+        (function
+          | (_,Rectangle r) ->
+            let rright = r.left + r.width in
+            let rbottom = r.top + r.height in
+            let rOverlapBox =
+              [ (rright, r.top)
+              ; (rright, rbottom)
+              ; (r.left, r.top)
+              ; (r.left, rbottom)
+              ]
+              |> listAny (fun (x,y) -> ptInsideRect x y box)
+            in
+            let boxOverlapR =
+              [ (bright, b.top)
+              ; (bright, bbottom)
+              ; (b.left, b.top)
+              ; (b.left, bbottom)
+              ]
+              |> listAny (fun (x,y) -> ptInsideRect x y (Rectangle r))
+            in
+            rOverlapBox || boxOverlapR
+      )
+    in
+    found
+
+let allowedBoxLocation id box model' =
+  let model = { model' with shapes = IntMap.remove id model'.shapes } in
+  let shapes = overlappingShapes box model in
+  List.length shapes == 0
+
+let finishClick x y model =
+  match findRect x y model with
+  | Some (name, Rectangle r) ->
+    { model with
+      selectedForTyping = name
+    }
+  | _ -> { model with selectedForTyping = -1 }
+
 let offsetShape x y = function
   | Rectangle r ->
-    Rectangle { r with top = r.top + y ; left = r.left + x }
+    let newX = max 0 (r.left + x) in
+    let newY = max 0 (r.top + y) in
+    Rectangle { r with top = newY ; left = newX }
+
+let sizeShape x y = function
+  | Rectangle r ->
+    let newWidth = max 3 (r.width + x) in
+    let newHeight = max 3 (r.height + y) in
+    Rectangle { r with height = newHeight ; width = newWidth }
 
 let finishDrag r model =
   match findRect r.mx r.my model with
-  | Some (name,shape) ->
-    let _ = Js.log shape in
-    { model with
-      shapes =
-        IntMap.update name
-          (fun _ ->
-             Some (offsetShape (r.nx - r.mx) (r.ny - r.my) shape)
-          )
-          model.shapes
-    }
+  | Some (name,Rectangle shape) ->
+    let llx = shape.left + shape.width in
+    let lly = shape.top + shape.height in
+    if llx == r.mx && lly == r.my then
+      let updatedBox = sizeShape (r.nx - r.mx) (r.ny - r.my) (Rectangle shape) in
+      if allowedBoxLocation name updatedBox model then
+        { model with
+          shapes = IntMap.update name (fun _ -> Some updatedBox) model.shapes
+        ; selectedForTyping = name
+        }
+      else
+        model
+    else
+      let updatedBox = offsetShape (r.nx - r.mx) (r.ny - r.my) (Rectangle shape) in
+      if allowedBoxLocation name updatedBox model then
+        { model with
+          shapes = IntMap.update name (fun _ -> Some updatedBox) model.shapes
+        ; selectedForTyping = name
+        }
+      else
+        model
   | _ -> model
 
+let rec findPositionForBox x y box model =
+  if y > 100 then
+    None
+  else if x > 100 then
+    findPositionForBox 0 (y + 1) box model
+  else
+    match box with
+    | Rectangle r ->
+      let tryit = Rectangle { r with left = x ; top = y } in
+      if allowedBoxLocation model.serial tryit model then
+        Some tryit
+      else
+        findPositionForBox (x + 1) y box model
+
 let update model = function
+  | NewBox ->
+    begin
+      let newbox = Rectangle { left = 0; top = 0; width = 6 ; height = 3 ; content = [| |] } in
+      match findPositionForBox 0 0 newbox model with
+      | None -> model
+      | Some b ->
+        { model with
+          shapes = IntMap.add model.serial b model.shapes ;
+          serial = model.serial + 1
+        }
+    end
+  | DelBox id ->
+    { model with
+      shapes = IntMap.remove id model.shapes
+    }
   | WinMsg (MouseDown (x,y)) ->
     let cx = int_of_float @@ (float_of_int x) /. !fontWidth in
     let cy = (int_of_float @@ (float_of_int y) /. !fontHeight) - headerSize in
+    let _ = Js.log @@ Printf.sprintf "mouwe down %d %d" cx cy in
     { model with mouseAction = Some (Down (cx,cy)) }
   | WinMsg (MouseMove (x,y)) ->
     begin
@@ -122,24 +215,25 @@ let padTo n s =
   else
     s
 
-let applyShape i s = function
-  | Rectangle r ->
+let applyShape model i s = function
+  | (name, Rectangle r) ->
     begin
       let string_length = String.length s in
       let left_of = padTo r.left (String.sub s 0 (min string_length r.left)) in
-      let right_idx = r.left + r.width in
+      let right_idx = r.left + r.width + 1 in
       let right_of =
         if string_length > right_idx then
           String.sub s right_idx (string_length - right_idx)
         else
           ""
       in
+      let hfill = if model.selectedForTyping == name then '=' else '-' in
       if i == r.top then
-        left_of ^ "," ^ (String.make (r.width - 2) '-') ^ "." ^ right_of
-      else if i >= r.top && i < (r.top + r.height - 1) then
-        left_of ^ "|" ^ (String.make (r.width - 2) ' ') ^ "|" ^ right_of
-      else if i == r.top + r.height - 1 then
-        left_of ^ "`" ^ (String.make (r.width - 2) '-') ^ "'" ^ right_of
+        left_of ^ "," ^ (String.make (r.width - 1) hfill) ^ "." ^ right_of
+      else if i >= r.top && i < (r.top + r.height) then
+        left_of ^ "|" ^ (String.make (r.width - 1) ' ') ^ "|" ^ right_of
+      else if i == r.top + r.height then
+        left_of ^ "`" ^ (String.make (r.width - 1) hfill) ^ "'" ^ right_of
       else
         s
     end
@@ -166,8 +260,7 @@ let rerender model' =
         (fun i ->
            model.shapes
            |> IntMap.bindings
-           |> List.map (fun (_,x) -> x)
-           |> List.fold_left (applyShape i) ""
+           |> List.fold_left (applyShape model i) ""
         )
       |> Array.of_list
   }
@@ -215,6 +308,7 @@ let init () =
         (fun m (n,v) -> IntMap.add n v m)
         IntMap.empty
   ; serial = 1
+  ; selectedForTyping = 0
   ; mouseAction = None
   }
   |> rerender
@@ -233,22 +327,25 @@ let view model =
   in
   div
     []
-    [ div [ ] [ text "controls" ]
+    [ div [ id "controls" ]
+        [ text "controls"
+        ; div [ classList [("control", true)] ; onClick NewBox ] [ text "[ new box ]" ]
+        ; div [ classList [("control", true)] ; onClick (DelBox model.selectedForTyping) ] [ text "[ delete box ]" ]
+        ; div [ classList [("control", true)] ] [ text "[ edit ]" ]
+        ]
     ; div [ id "ruler-container" ]
         [ div [ id "ruler" ; classList [ ("dwg-row",true) ] ] [ text @@ ruler () ]
         ]
-    ; div [ ]
+    ; div
+        [ onMouseDown (moveMouse (fun p -> MouseDown p))
+        ; onMouseMove (moveMouse (fun p -> MouseMove p))
+        ; onMouseUp upMouse
+        ]
         (
           rendered_show
           |> Array.map (fun t -> pre [ classList [("dwg-row",true)] ] [ text t ])
           |> Array.to_list
         )
-    ; div
-        [ id "mousecover"
-        ; onMouseDown (moveMouse (fun p -> MouseDown p))
-        ; onMouseMove (moveMouse (fun p -> MouseMove p))
-        ; onMouseUp upMouse
-        ] [ ]
     ]
 
 let main =

@@ -36,3 +36,12 @@ module Option = struct
     | Some v -> if f v then Some v else None
     | _ -> None
 end
+
+let rec listAny f = function
+  | [] -> false
+  | hd :: tl -> (f hd) || listAny f tl
+
+let rec catOptions = function
+  | [] -> []
+  | None :: tl -> catOptions tl
+  | (Some a) :: tl -> a :: catOptions tl

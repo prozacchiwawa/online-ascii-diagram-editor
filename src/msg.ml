@@ -6,4 +6,6 @@ type mouseMsg =
 type msg =
   | Noop
   | WinMsg of mouseMsg
+  | NewBox
+  | DelBox of int
 [@@bs.deriving {accessors}]
