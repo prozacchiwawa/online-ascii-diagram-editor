@@ -41,6 +41,44 @@
          .control {
              margin-left: 15px;
              cursor: pointer;
+             flex-grow: 0;
+             flex-shrink: 0;
+         }
+
+         #edit {
+         }
+
+         .edit-active {
+             display: flex;
+             flex-direction: column;
+             align-items: center;
+             justify-content: center;
+             position: absolute;
+             left: 0;
+             top: 0;
+             width: 100vw;
+             height: 100vh;
+             background: rgba(0,0,0,0.6);
+             z-index: 3;
+         }
+
+         .edit-hidden {
+             display: none;
+         }
+
+         .edit-box {
+             width: 70vw;
+             height: 70vh;
+         }
+
+         .edit-control-bar {
+             display: flex;
+             background-color: white;
+             width: 70vw;
+         }
+
+         .control-spacer {
+             flex-grow: 1;
          }
         </style>
     </head>

@@ -32,12 +32,19 @@ type move
   = Down of (int * int)
   | Drag of mousedown
 
+type edit =
+  { editingId : int
+  ; editingText : string
+  }
+
 type state =
   { rendered : string array
   ; shapes : shape IntMap.t
   ; serial : int
   ; mouseAction : move option
   ; selectedForTyping : int
+  ; editing : edit option
+  ; prev : state option
   }
 
 let ptInsideRect x y = function
@@ -129,6 +136,7 @@ let finishDrag r model =
         { model with
           shapes = IntMap.update name (fun _ -> Some updatedBox) model.shapes
         ; selectedForTyping = name
+        ; prev = Some model
         }
       else
         model
@@ -138,6 +146,7 @@ let finishDrag r model =
         { model with
           shapes = IntMap.update name (fun _ -> Some updatedBox) model.shapes
         ; selectedForTyping = name
+        ; prev = Some model
         }
       else
         model
@@ -166,12 +175,52 @@ let update model = function
       | Some b ->
         { model with
           shapes = IntMap.add model.serial b model.shapes ;
-          serial = model.serial + 1
+          serial = model.serial + 1 ;
+          prev = Some model
         }
     end
   | DelBox id ->
     { model with
-      shapes = IntMap.remove id model.shapes
+      shapes = IntMap.remove id model.shapes ;
+      prev = Some model
+    }
+  | Undo ->
+    begin
+      match model.prev with
+      | Some p -> p
+      | None -> model
+    end
+  | Edit id ->
+    begin
+      try
+        let toEdit = IntMap.find id model.shapes in
+        match toEdit with
+        | Rectangle te ->
+          let editString =
+            Array.to_list te.content
+            |> String.concat "\n"
+          in
+          { model with editing = Some { editingId = id ; editingText = editString } }
+      with _ ->
+        model
+    end
+  | CancelEdit -> { model with editing = None }
+  | ChangeText (id,t) -> { model with editing = Some { editingId = id ; editingText = t } }
+  | UseEdit (id,t) ->
+    { model with
+      shapes =
+        IntMap.update
+          id
+          (fun s ->
+             match s with
+             | Some (Rectangle r) ->
+               let newContent = split "\n" t in
+               Some (Rectangle { r with content = newContent })
+             | None -> None
+          )
+          model.shapes
+    ; editing = None
+    ; prev = Some { model with editing = None }
     }
   | WinMsg (MouseDown (x,y)) ->
     let cx = int_of_float @@ (float_of_int x) /. !fontWidth in
@@ -231,7 +280,18 @@ let applyShape model i s = function
       if i == r.top then
         left_of ^ "," ^ (String.make (r.width - 1) hfill) ^ "." ^ right_of
       else if i >= r.top && i < (r.top + r.height) then
-        left_of ^ "|" ^ (String.make (r.width - 1) ' ') ^ "|" ^ right_of
+        let boxIndex = i - r.top - 1 in
+        let boxLine =
+          if boxIndex < Array.length r.content then
+            let blString = Array.get r.content boxIndex in
+            if String.length blString > r.width - 1 then
+              String.sub blString 0 (r.width - 1)
+            else
+              blString
+          else
+            ""
+        in
+        left_of ^ "|" ^ (padTo (r.width - 1) boxLine) ^ "|" ^ right_of
       else if i == r.top + r.height then
         left_of ^ "`" ^ (String.make (r.width - 1) hfill) ^ "'" ^ right_of
       else
@@ -310,6 +370,8 @@ let init () =
   ; serial = 1
   ; selectedForTyping = 0
   ; mouseAction = None
+  ; editing = None
+  ; prev = None
   }
   |> rerender
 
@@ -317,6 +379,18 @@ let ruler () =
   range 0 10
   |> List.map (fun _ -> "....:....")
   |> String.concat "|"
+
+let viewEditBody model =
+  match model.editing with
+  | None -> []
+  | Some e ->
+    [ textarea [ classList [("edit-box",true)] ; onChange (fun t -> ChangeText (e.editingId, t)) ] [ text e.editingText ] ;
+      div [ classList [("edit-control-bar",true)] ]
+        [ div [ classList [("control-spacer",true)] ] []
+        ; div [ classList [("control",true)] ; onClick (UseEdit (e.editingId, e.editingText)) ] [ text "[ Accept ]" ]
+        ; div [ classList [("control",true)] ; onClick CancelEdit ] [ text "[ Cancel ]" ]
+        ]
+    ]
 
 let view model =
   let rendered_show = (* Add a few lines *)
@@ -331,7 +405,8 @@ let view model =
         [ text "controls"
         ; div [ classList [("control", true)] ; onClick NewBox ] [ text "[ new box ]" ]
         ; div [ classList [("control", true)] ; onClick (DelBox model.selectedForTyping) ] [ text "[ delete box ]" ]
-        ; div [ classList [("control", true)] ] [ text "[ edit ]" ]
+        ; div [ classList [("control", true)] ; onClick (Edit model.selectedForTyping) ] [ text "[ edit ]" ]
+        ; div [ classList [("control", true)] ; onClick Undo ] [ text "[ undo ]" ]
         ]
     ; div [ id "ruler-container" ]
         [ div [ id "ruler" ; classList [ ("dwg-row",true) ] ] [ text @@ ruler () ]
@@ -346,6 +421,9 @@ let view model =
           |> Array.map (fun t -> pre [ classList [("dwg-row",true)] ] [ text t ])
           |> Array.to_list
         )
+    ; div
+        [ id "edit" ; classList [ ("edit-active", model.editing <> None) ; ("edit-hidden", model.editing = None) ] ]
+        (viewEditBody model)
     ]
 
 let main =
