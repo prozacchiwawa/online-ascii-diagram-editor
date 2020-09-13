@@ -1,6 +1,6 @@
 # online ascii diagram editor
 
-![screenshot](https://raw.githubusercontent.com/prozacchiwawa/online-ascii-diagram-editor/master/screenshot.png)
+![screenshot](https://raw.githubusercontent.com/prozacchiwawa/online-ascii-diagram-editor/base/screenshot.png)
 
 An experiment in making an editor that has the features I use from emacs' picture mode.
 
