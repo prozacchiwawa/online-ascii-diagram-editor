@@ -898,9 +898,9 @@ let applyShape model i s = function
         let boxIndex = i - r.top - 1 in
         let boxLine =
           if boxIndex < Array.length r.content then
-            let blString = Array.get r.content boxIndex in
-            if String.length blString > r.width - 1 then
-              String.sub blString 0 (r.width - 1)
+            let blString = " " ^ Array.get r.content boxIndex in
+            if String.length blString > r.width - 2 then
+              String.sub blString 0 (r.width - 2)
             else
               blString
           else
