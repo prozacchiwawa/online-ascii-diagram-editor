@@ -720,7 +720,8 @@ let loadFile name data model =
     shapes = shapes ;
     drawing = drawing ;
     filename = name ;
-    serial = serial
+    serial = serial ;
+    prev = None
   }
 
 let exportFile model =
