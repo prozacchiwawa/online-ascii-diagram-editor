@@ -709,7 +709,19 @@ let loadFile name data model =
       (fun chmap (pt,ch) -> IntPairMap.add pt ch chmap)
       IntPairMap.empty
   in
-  { model with shapes = shapes ; drawing = drawing ; filename = name }
+  let serial =
+    try
+      shapes
+      |> IntMap.max_binding
+      |> (fun (id,_) -> id + 1)
+    with _ -> 2
+  in
+  { model with
+    shapes = shapes ;
+    drawing = drawing ;
+    filename = name ;
+    serial = serial
+  }
 
 let exportFile model =
   let rendered =
