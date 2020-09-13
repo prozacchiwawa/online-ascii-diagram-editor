@@ -1156,7 +1156,7 @@ let showSave model =
      | Some link ->
        [ div
            [ id "save-box-container" ]
-           [ div [ id "save-box-link" ] [ a [ href link ] [ text "Save Link" ] ]
+           [ div [ id "save-box-link" ] [ a [ href link ; target "_blank" ] [ text "Save Link" ] ]
            ; div
                [ classList [("edit-control-bar",true)] ]
                [ div [ classList [("control-spacer",true)] ] []
