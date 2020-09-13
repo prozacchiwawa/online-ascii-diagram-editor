@@ -724,9 +724,108 @@ let loadFile name data model =
     prev = None
   }
 
+let applyShape decorate model i s = function
+  | (name, Rectangle r) ->
+    begin
+      let string_length = String.length s in
+      let left_of = padTo r.left (String.sub s 0 (min string_length r.left)) in
+      let right_idx = r.left + r.width + 1 in
+      let right_of =
+        if string_length > right_idx then
+          String.sub s right_idx (string_length - right_idx)
+        else
+          ""
+      in
+      let hfill = if model.selectedForTyping == name && decorate then '=' else '-' in
+      if i == r.top then
+        left_of ^ "," ^ (String.make (r.width - 1) hfill) ^ "." ^ right_of
+      else if i >= r.top && i < (r.top + r.height) then
+        let boxIndex = i - r.top - 1 in
+        let boxLine =
+          if boxIndex < Array.length r.content then
+            let blString = " " ^ Array.get r.content boxIndex in
+            if String.length blString > r.width - 2 then
+              String.sub blString 0 (r.width - 2)
+            else
+              blString
+          else
+            ""
+        in
+        left_of ^ "|" ^ (padTo (r.width - 1) boxLine) ^ "|" ^ right_of
+      else if i == r.top + r.height then
+        left_of ^ "`" ^ (String.make (r.width - 1) hfill) ^ "'" ^ right_of
+      else
+        s
+    end
+
+let applyLines strings lmap =
+  Array.mapi
+    (fun i s ->
+       try
+         let charsInLine = IntMap.find i lmap in
+         applyLine s charsInLine
+       with _ -> s
+    )
+    strings
+
+let applyPath model =
+  match model.drawMode |> Option.bind (fun d -> d.linePath) with
+  | Some lp -> renderLinePath lp model.drawing
+  | _ -> model.drawing
+
+let applyDrawing drawing strings =
+  drawing
+  |> IntPairMap.bindings
+  |> extractLines IntMap.empty
+  |> applyLines strings
+
+let renderDrawDrag model =
+  match model.drawMode with
+  | None -> model
+  | Some d ->
+    match d.dragEnd with
+    | Some (PrevSelection (x,y,rect)) -> finishDrawDrag x y rect d model
+    | _ -> model
+
+let rerender decorate model' =
+  let model =
+    match model'.mouseAction with
+    | Some (Drag r) -> finishDrag r model'
+    | _ -> model'
+  in
+  let upper_bound_shapes =
+    model.shapes
+    |> IntMap.bindings
+    |> List.fold_left
+      (fun ub -> function
+        | (_, Rectangle r) -> max (r.top + r.height + 1) ub
+      )
+      0
+  in
+  let upper_bound_chars =
+    try
+      let ((y,x),_) = IntPairMap.max_binding model.drawing in
+      y + 1
+    with _ -> 0
+  in
+  let upper_bound = max upper_bound_shapes upper_bound_chars in
+  { model' with
+    rendered =
+      range 0 upper_bound
+      |> List.map
+        (fun i ->
+           model.shapes
+           |> IntMap.bindings
+           |> List.fold_left (applyShape decorate model i) ""
+        )
+      |> Array.of_list
+      |> applyDrawing (applyPath (renderDrawDrag model))
+  }
+
 let exportFile model =
+  let renderModel = rerender false model in
   let rendered =
-    Array.to_list model.rendered
+    Array.to_list renderModel.rendered
     |> String.concat "\n"
   in
   let filenameSplit = split "." model.filename in
@@ -897,104 +996,6 @@ let update model = function
   | Load (name,data) -> loadFile name data model
   | _ -> model
 
-let applyShape model i s = function
-  | (name, Rectangle r) ->
-    begin
-      let string_length = String.length s in
-      let left_of = padTo r.left (String.sub s 0 (min string_length r.left)) in
-      let right_idx = r.left + r.width + 1 in
-      let right_of =
-        if string_length > right_idx then
-          String.sub s right_idx (string_length - right_idx)
-        else
-          ""
-      in
-      let hfill = if model.selectedForTyping == name then '=' else '-' in
-      if i == r.top then
-        left_of ^ "," ^ (String.make (r.width - 1) hfill) ^ "." ^ right_of
-      else if i >= r.top && i < (r.top + r.height) then
-        let boxIndex = i - r.top - 1 in
-        let boxLine =
-          if boxIndex < Array.length r.content then
-            let blString = " " ^ Array.get r.content boxIndex in
-            if String.length blString > r.width - 2 then
-              String.sub blString 0 (r.width - 2)
-            else
-              blString
-          else
-            ""
-        in
-        left_of ^ "|" ^ (padTo (r.width - 1) boxLine) ^ "|" ^ right_of
-      else if i == r.top + r.height then
-        left_of ^ "`" ^ (String.make (r.width - 1) hfill) ^ "'" ^ right_of
-      else
-        s
-    end
-
-let applyLines strings lmap =
-  Array.mapi
-    (fun i s ->
-       try
-         let charsInLine = IntMap.find i lmap in
-         applyLine s charsInLine
-       with _ -> s
-    )
-    strings
-
-let applyPath model =
-  match model.drawMode |> Option.bind (fun d -> d.linePath) with
-  | Some lp -> renderLinePath lp model.drawing
-  | _ -> model.drawing
-
-let applyDrawing drawing strings =
-  drawing
-  |> IntPairMap.bindings
-  |> extractLines IntMap.empty
-  |> applyLines strings
-
-let renderDrawDrag model =
-  match model.drawMode with
-  | None -> model
-  | Some d ->
-    match d.dragEnd with
-    | Some (PrevSelection (x,y,rect)) -> finishDrawDrag x y rect d model
-    | _ -> model
-
-let rerender model' =
-  let model =
-    match model'.mouseAction with
-    | Some (Drag r) -> finishDrag r model'
-    | _ -> model'
-  in
-  let upper_bound_shapes =
-    model.shapes
-    |> IntMap.bindings
-    |> List.fold_left
-      (fun ub -> function
-        | (_, Rectangle r) -> max (r.top + r.height + 1) ub
-      )
-      0
-  in
-  let upper_bound_chars =
-    try
-      let ((y,x),_) = IntPairMap.max_binding model.drawing in
-      y + 1
-    with _ -> 0
-  in
-  let upper_bound = max upper_bound_shapes upper_bound_chars in
-  { model' with
-    rendered =
-      range 0 upper_bound
-      |> List.map
-        (fun i ->
-           model.shapes
-           |> IntMap.bindings
-           |> List.fold_left (applyShape model i) ""
-        )
-      |> Array.of_list
-      |> applyDrawing (applyPath (renderDrawDrag model))
-  }
-
 let measureRuler () =
   let eltOpt = Window.getElementById "ruler" in
   match Js.Nullable.toOption eltOpt with
@@ -1047,7 +1048,7 @@ let init () =
   ; filename = "drawing.json"
   ; saveUrl = None
   }
-  |> rerender
+  |> rerender true
 
 let ruler () =
   range 0 10
@@ -1227,6 +1228,6 @@ let main =
   ignore @@ keySendToApp () ;
   beginnerProgram
     { model = init ()
-    ; update = (fun model msg -> update model msg |> rerender)
+    ; update = (fun model msg -> update model msg |> rerender true)
     ; view = view
   }
