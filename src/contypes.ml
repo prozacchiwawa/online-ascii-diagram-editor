@@ -60,3 +60,12 @@ let padTo n s =
     s ^ padding
   else
     s
+
+let replaceInString x ch s =
+  let slen = String.length s in
+  if slen < x then
+    (padTo x s) ^ (String.make 1 ch)
+  else if slen == x then
+    s ^ (String.make 1 ch)
+  else
+    (String.sub s 0 x) ^ (String.make 1 ch) ^ (String.sub s (x+1) (slen - x - 1))

@@ -27,4 +27,8 @@ type msg =
   | UseEdit of (int * string)
   | Help
   | NoHelp
+  | Save
+  | Export
+  | EndSave of string
+  | Load of (string * Js.Json.t Js.Dict.t)
 [@@bs.deriving {accessors}]

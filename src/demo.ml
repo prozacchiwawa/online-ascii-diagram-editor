@@ -73,7 +73,10 @@ type state =
   ; selectedForTyping : int
   ; editing : edit option
   ; drawMode : draw option
+  ; ctrl : bool
   ; help : bool
+  ; filename : string
+  ; saveUrl : string option
   ; prev : state option
   }
 
@@ -328,11 +331,13 @@ let keyDownDrawMode k d model =
         { model with
           drawing = clearBox model.drawing (Rectangle { left = minX ; top = minY ; width = maxX - minX ; height = maxY - minY ; content = [| |] })
         ; drawMode = Some { d with dragEnd = None }
+        ; prev = Some { model with drawMode = None }
         }
       | _ ->
         { model with
           drawing = IntPairMap.remove (d.drawAtY, d.drawAtX - 1) model.drawing
         ; drawMode = Some { d with drawAtX = max 0 (d.drawAtX - 1) }
+        ; prev = Some { model with drawMode = None }
         }
     else if k.keyCode == 37 then
       { model with
@@ -520,6 +525,199 @@ let finishDrawDrag sx sy (drag : mousedown) d model =
   ; prev = Some { model with drawMode = None }
   }
 
+let undo model =
+  match model.prev with
+  | Some p -> p
+  | None -> model
+
+let extractLines =
+  List.fold_left
+    (fun lmap ((y,x),ch) ->
+       IntMap.update
+         y
+         (function
+           | None -> Some (IntMap.add x ch IntMap.empty)
+           | Some m -> Some (IntMap.add x ch m)
+         )
+         lmap
+    )
+
+let applyLine s charsInLine =
+  let charsArray =
+    charsInLine
+    |> IntMap.bindings
+    |> Array.of_list
+  in
+  charsArray
+  |> Array.fold_left (fun s (x,ch) -> replaceInString x ch s) s
+
+let saveFile model =
+  let encodedShapes =
+    model.shapes
+    |> IntMap.bindings
+    |> List.map
+      (fun (id,shape) ->
+         match shape with
+         | Rectangle r ->
+           [ ("type", Js.Json.string "rectangle")
+           ; ("id", Js.Json.number (float_of_int id))
+           ; ("top", Js.Json.number (float_of_int r.top))
+           ; ("left", Js.Json.number (float_of_int r.left))
+           ; ("height", Js.Json.number (float_of_int r.height))
+           ; ("width", Js.Json.number (float_of_int r.width))
+           ; ("content", Js.Json.string (String.concat "\n" (Array.to_list r.content)))
+           ]
+           |> Js.Dict.fromList
+           |> Js.Json.object_
+      )
+    |> Array.of_list
+  in
+  let encodedPlane =
+    model.drawing
+    |> IntPairMap.bindings
+    |> extractLines IntMap.empty
+    |> IntMap.bindings
+    |> List.map
+      (fun (y,row) ->
+         [ ("y", Js.Json.number (float_of_int y))
+         ; ("row", Js.Json.string (applyLine "" row))
+         ]
+         |> Js.Dict.fromList
+         |> Js.Json.object_
+      )
+    |> Array.of_list
+  in
+  let encoded =
+    [ ("name", Js.Json.string model.filename)
+    ; ("shapes", Js.Json.array encodedShapes)
+    ; ("charplane", Js.Json.array encodedPlane)
+    ]
+    |> Js.Dict.fromList
+    |> Js.Json.object_
+  in
+  let encodedString = Js.Json.stringify encoded in
+  let f = File.newFile [| encodedString |] model.filename (File.props "application/json") in
+  let u = File.createObjectURLFromFile f in
+  { model with saveUrl = Some u }
+
+let decodeInt js = Js.Json.decodeNumber js |> Option.map int_of_float
+
+let decodeShape dict =
+  let _ = Js.log "decodeShape" in
+  let _ = Js.log dict in
+  let type_ =
+    Js.Dict.get dict "type"
+    |> Option.bind Js.Json.decodeString
+  in
+  let id =
+    Js.Dict.get dict "id"
+    |> Option.bind decodeInt
+  in
+  let top =
+    Js.Dict.get dict "top"
+    |> Option.bind decodeInt
+  in
+  let left =
+    Js.Dict.get dict "left"
+    |> Option.bind decodeInt
+  in
+  let height =
+    Js.Dict.get dict "height"
+    |> Option.bind decodeInt
+  in
+  let width =
+    Js.Dict.get dict "width"
+    |> Option.bind decodeInt
+  in
+  let content =
+    Js.Dict.get dict "content"
+    |> Option.bind Js.Json.decodeString
+    |> Option.map (split "\n")
+  in
+  match (type_, id, top, left, height, width, content) with
+  | (Some "rectangle", Some id, Some top, Some left, Some height, Some width, Some content) ->
+    Some
+      ( id
+      , Rectangle
+          { top = top
+          ; left = left
+          ; height = height
+          ; width = width
+          ; content = content
+          }
+      )
+  | _ -> None
+
+let charLineToPair y row =
+  let slen = String.length row in
+  range 0 slen
+  |> List.map
+    (fun i ->
+       let ch = String.get row i in
+       if ch <> ' ' then
+         Some ((y,i),ch)
+       else
+         None
+    )
+  |> catOptions
+
+let decodeCharLine dict =
+  let y = Js.Dict.get dict "y" |> Option.bind decodeInt in
+  let row = Js.Dict.get dict "row" |> Option.bind Js.Json.decodeString in
+  match (y,row) with
+  | (Some y, Some row) ->
+    Some (charLineToPair y row)
+  | _ -> None
+
+let loadFile name data model =
+  let _ = Printf.printf "loadFile %s" name in
+  let _ = Js.log data in
+  let name =
+    Js.Dict.get data "name"
+    |> Option.bind Js.Json.decodeString
+    |> Option.default "drawing.json"
+  in
+  let shapes =
+    Js.Dict.get data "shapes"
+    |> Option.bind Js.Json.decodeArray
+    |> Option.default [| |]
+    |> Array.to_list
+    |> List.map Js.Json.decodeObject
+    |> catOptions
+    |> List.map decodeShape
+    |> catOptions
+    |> List.fold_left
+      (fun shmap (id,shape) -> IntMap.add id shape shmap)
+      IntMap.empty
+  in
+  let drawing =
+    Js.Dict.get data "charplane"
+    |> Option.bind Js.Json.decodeArray
+    |> Option.default [| |]
+    |> Array.to_list
+    |> List.map Js.Json.decodeObject
+    |> catOptions
+    |> List.map decodeCharLine
+    |> catOptions
+    |> List.concat
+    |> List.fold_left
+      (fun chmap (pt,ch) -> IntPairMap.add pt ch chmap)
+      IntPairMap.empty
+  in
+  { model with shapes = shapes ; drawing = drawing ; filename = name }
+
+let exportFile model =
+  let rendered =
+    Array.to_list model.rendered
+    |> String.concat "\n"
+  in
+  let filenameSplit = split "." model.filename in
+  let _ = Array.set filenameSplit ((Array.length filenameSplit) - 1) ".txt" in
+  let outputFilename = String.concat "." (Array.to_list filenameSplit) in
+  let f = File.newFile [| rendered |] outputFilename (File.props "text/plain") in
+  let u = File.createObjectURLFromFile f in
+  { model with saveUrl = Some u }
+
 let update model = function
   | NewBox ->
     begin
@@ -538,12 +736,7 @@ let update model = function
       shapes = IntMap.remove id model.shapes ;
       prev = Some model
     }
-  | Undo ->
-    begin
-      match model.prev with
-      | Some p -> p
-      | None -> model
-    end
+  | Undo -> undo model
   | Edit id ->
     begin
       try
@@ -592,15 +785,29 @@ let update model = function
   | BoxMode -> { model with drawMode = None }
   | KeyMsg (KeyDown k) ->
     begin
-      match model.drawMode with
-      | Some d -> keyDownDrawMode k d model
-      | _ -> model
+      let _ = Js.log "keydown" in
+      let _ = Js.log k in
+      if k.keyCode == 17 then
+        { model with ctrl = true }
+      else if model.ctrl then
+        if k.key == "z" then
+          let undid = undo model in
+          { undid with ctrl = true }
+        else
+          model
+      else
+        match model.drawMode with
+        | Some d -> keyDownDrawMode k d model
+        | _ -> model
     end
   | KeyMsg (KeyUp k) ->
     begin
-      match model.drawMode with
-      | Some d -> keyUpDrawMode k d model
-      | _ -> model
+      if k.keyCode == 17 then
+        { model with ctrl = false }
+      else
+        match model.drawMode with
+        | Some d -> keyUpDrawMode k d model
+        | _ -> model
     end
   | MouseMsg (MouseDown (x,y)) ->
     begin
@@ -664,6 +871,12 @@ let update model = function
     end
   | Help -> { model with help = true }
   | NoHelp -> { model with help = false }
+  | Save -> saveFile model
+  | Export -> exportFile model
+  | EndSave url ->
+    File.revokeObjectURL url ;
+    { model with saveUrl = None }
+  | Load (name,data) -> loadFile name data model
   | _ -> model
 
 let applyShape model i s = function
@@ -700,39 +913,12 @@ let applyShape model i s = function
         s
     end
 
-let extractLines =
-  List.fold_left
-    (fun lmap ((y,x),ch) ->
-       IntMap.update
-         y
-         (function
-           | None -> Some (IntMap.add x ch IntMap.empty)
-           | Some m -> Some (IntMap.add x ch m)
-         )
-         lmap
-    )
-
-let replaceInString x ch s =
-  let slen = String.length s in
-  if slen < x then
-    (padTo x s) ^ (String.make 1 ch)
-  else if slen == x then
-    s ^ (String.make 1 ch)
-  else
-    (String.sub s 0 x) ^ (String.make 1 ch) ^ (String.sub s (x+1) (slen - x - 1))
-
 let applyLines strings lmap =
   Array.mapi
     (fun i s ->
        try
          let charsInLine = IntMap.find i lmap in
-         let charsArray =
-           charsInLine
-           |> IntMap.bindings
-           |> Array.of_list
-         in
-         charsArray
-         |> Array.fold_left (fun s (x,ch) -> replaceInString x ch s) s
+         applyLine s charsInLine
        with _ -> s
     )
     strings
@@ -747,6 +933,14 @@ let applyDrawing drawing strings =
   |> IntPairMap.bindings
   |> extractLines IntMap.empty
   |> applyLines strings
+
+let renderDrawDrag model =
+  match model.drawMode with
+  | None -> model
+  | Some d ->
+    match d.dragEnd with
+    | Some (PrevSelection (x,y,rect)) -> finishDrawDrag x y rect d model
+    | _ -> model
 
 let rerender model' =
   let model =
@@ -780,7 +974,7 @@ let rerender model' =
            |> List.fold_left (applyShape model i) ""
         )
       |> Array.of_list
-      |> applyDrawing (applyPath model)
+      |> applyDrawing (applyPath (renderDrawDrag model))
   }
 
 let measureRuler () =
@@ -830,7 +1024,10 @@ let init () =
   ; editing = None
   ; drawMode = None
   ; prev = None
+  ; ctrl = false
   ; help = false
+  ; filename = "drawing.json"
+  ; saveUrl = None
   }
   |> rerender
 
@@ -900,8 +1097,6 @@ let drawingCursorDiv model =
       [ id "drawing-cursor"
       ; classList [("drawing-cursor",true)]
       ; styles [ ("left", xloc) ; ("top", yloc) ; ("width", width) ; ("height", height) ]
-      ; onKeyDown (keyData (fun (code,name) -> KeyDown { keyCode = code ; key = name }))
-      ; onKeyUp (keyData (fun (code,name) -> KeyUp { keyCode = code ; key = name }))
       ] []
 
 let controlsDiv model =
@@ -909,13 +1104,18 @@ let controlsDiv model =
   | Some d ->
     div [ id "controls" ]
       [ text "controls"
+      ; div [ classList [("control", true)] ; onClick Save ] [ text "[ save ]" ]
+      ; div [ classList [("control", true)] ; onClick Export ] [ text "[ export ]" ]
       ; div [ classList [("control", true)] ; onClick BoxMode ] [ text "[ -> box mode ]" ]
+      ; div [ classList [("control", true)] ; onClick Undo ] [ text "[ undo ]" ]
       ; div [ classList [("control-spacer",true)] ] []
       ; div [ classList [("control", true)] ; onClick Help ] [ text "[ help ]" ]
       ]
   | _ ->
     div [ id "controls" ]
       [ text "controls"
+      ; div [ classList [("control", true)] ; onClick Save ] [ text "[ save ]" ]
+      ; div [ classList [("control", true)] ; onClick Export ] [ text "[ export ]" ]
       ; div [ classList [("control", true)] ; onClick DrawMode ] [ text "[ -> draw mode ]" ]
       ; div [ classList [("control", true)] ; onClick NewBox ] [ text "[ new box ]" ]
       ; div [ classList [("control", true)] ; onClick (DelBox model.selectedForTyping) ] [ text "[ delete box ]" ]
@@ -924,6 +1124,30 @@ let controlsDiv model =
       ; div [ classList [("control-spacer",true)] ] []
       ; div [ classList [("control", true)] ; onClick Help ] [ text "[ help ]" ]
       ]
+
+let showSave model =
+  div
+    [ classList
+        [ ("save-container", model.saveUrl <> None)
+        ; ("save-container-hidden", model.saveUrl = None)
+        ]
+    ]
+    (match model.saveUrl with
+     | None -> [ div [ id "save-box-container" ] [] ]
+     | Some link ->
+       [ div
+           [ id "save-box-container" ]
+           [ div [ id "save-box-link" ] [ a [ href link ] [ text "Save Link" ] ]
+           ; div
+               [ classList [("edit-control-bar",true)] ]
+               [ div [ classList [("control-spacer",true)] ] []
+               ; div
+                   [ classList [("control",true)] ; onClick (EndSave link) ]
+                   [ text "[ Done ]" ]
+               ]
+           ]
+       ]
+    )
 
 let showHelp model =
   div
@@ -950,7 +1174,11 @@ let view model =
     [ id "app-div"
     ]
     [ controlsDiv model
-    ; div [ id "ruler-container" ]
+    ; div
+        [ id "ruler-container"
+        ; onKeyDown (keyData (fun (code,name) -> KeyDown { keyCode = code ; key = name }))
+        ; onKeyUp (keyData (fun (code,name) -> KeyUp { keyCode = code ; key = name }))
+        ]
         [ div [ id "ruler" ; classList [ ("dwg-row",true) ] ] [ text @@ ruler () ]
         ]
     ; div
@@ -962,11 +1190,15 @@ let view model =
         )
     ; drawingCursorDiv model
     ; showHelp model
+    ; showSave model
     ; div
         [ id "mousecover"
         ; onMouseDown (moveMouse (fun p -> MouseDown p))
         ; onMouseMove (moveMouse (fun p -> MouseMove p))
         ; onMouseUp upMouse
+        ; File.onFile File.takeFile
+        ; File.onDrop File.dropFile
+        ; File.onDragOver File.dragOver
         ] []
     ; div
         [ id "edit" ; classList [ ("edit-active", model.editing <> None) ; ("edit-hidden", model.editing = None) ] ]
