@@ -12,9 +12,10 @@
          #mousecover {
              position: absolute;
              left: 0;
+             top: 0;
              width: 100vw;
              height: 100vh;
-             z-index: 2;
+             z-index: 3;
          }
 
          #ruler-container {
@@ -33,9 +34,11 @@
          }
 
          #controls {
+             position: relative;
              display: flex;
              flex-direction: row;
              margin: 0;
+             z-index: 4;
          }
 
          .control {
@@ -59,7 +62,7 @@
              width: 100vw;
              height: 100vh;
              background: rgba(0,0,0,0.6);
-             z-index: 3;
+             z-index: 4;
          }
 
          .edit-hidden {
@@ -83,7 +86,8 @@
 
          .drawing-cursor {
              position: absolute;
-             background-color: green;
+             z-index: 2;
+             background-color: rgba(0,240,0,0.6);
          }
 
          .hidden-help-container {

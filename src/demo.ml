@@ -43,11 +43,17 @@ type edit =
   ; editingText : string
   }
 
+type drawDrag
+  = NoSelection of (int * int)
+  | PrevSelection of (int * int * mousedown)
+
 type draw =
   { drawAtX : int
   ; drawAtY : int
   ; drawStartX : int
   ; drawStartY : int
+  ; drawMouseDown : bool
+  ; dragEnd : drawDrag option
   ; linePath : (int * int) list option
   }
 
@@ -234,7 +240,51 @@ let rec findPositionForBox x y box model =
         findPositionForBox (x + 1) y box model
 
 let drawMouseDown cx cy dm model =
-  { model with drawMode = Some { dm with drawAtX = cx ; drawAtY = cy ; drawStartX = cx ; drawStartY = cy } }
+  match dm.dragEnd with
+  | Some (NoSelection (x,y)) ->
+    let minX = min dm.drawAtX x in
+    let minY = min dm.drawAtY y in
+    let maxX = max dm.drawAtX x + 1 in
+    let maxY = max dm.drawAtY y + 1 in
+    if cx >= minX && cx <= maxX && cy >= minY && cy <= maxY then
+      { model with
+        drawMode =
+          Some
+            { dm with
+              drawAtX = cx
+            ; drawAtY = cy
+            ; drawMouseDown = true
+            ; dragEnd =
+                Some
+                  (PrevSelection (cx,cy,{ mx = minX ; my = minY ; nx = maxX ; ny = maxY }))
+            }
+      }
+    else
+      { model with
+        drawMode =
+          Some
+            { dm with
+              drawAtX = cx
+            ; drawAtY = cy
+            ; drawStartX = cx
+            ; drawStartY = cy
+            ; drawMouseDown = true
+            ; dragEnd = None
+            }
+      }
+  | _ ->
+    { model with
+      drawMode =
+        Some
+          { dm with
+            drawAtX = cx
+          ; drawAtY = cy
+          ; drawStartX = cx
+          ; drawStartY = cy
+          ; drawMouseDown = true
+          ; dragEnd = None
+          }
+    }
 
 let rec removeUntilMatch elt = function
   | [] -> None
@@ -269,10 +319,21 @@ let keyDownDrawMode k d model =
         drawMode = Some { d with drawAtX = d.drawStartX ; drawAtY = d.drawAtY + 1 }
       }
     else if k.keyCode == 8 then
-      { model with
-        drawing = IntPairMap.remove (d.drawAtY, d.drawAtX - 1) model.drawing
-      ; drawMode = Some { d with drawAtX = max 0 (d.drawAtX - 1) }
-      }
+      match d.dragEnd with
+      | Some (NoSelection (x,y)) ->
+        let minX = min d.drawAtX x in
+        let minY = min d.drawAtY y in
+        let maxX = max d.drawAtX x in
+        let maxY = max d.drawAtY y in
+        { model with
+          drawing = clearBox model.drawing (Rectangle { left = minX ; top = minY ; width = maxX - minX ; height = maxY - minY ; content = [| |] })
+        ; drawMode = Some { d with dragEnd = None }
+        }
+      | _ ->
+        { model with
+          drawing = IntPairMap.remove (d.drawAtY, d.drawAtX - 1) model.drawing
+        ; drawMode = Some { d with drawAtX = max 0 (d.drawAtX - 1) }
+        }
     else if k.keyCode == 37 then
       { model with
         drawMode =
@@ -339,16 +400,83 @@ let keyDownDrawMode k d model =
     else
       model
 
+type renderLinePathState =
+  { horizontal : bool option
+  ; prevX : int
+  ; prevY : int
+  }
+
 let renderLinePath lp drawing =
-  List.fold_left
-    (fun drawing (x,y) ->
-       IntPairMap.update
-         (y,x)
-         (fun _ -> Some '*')
-         drawing
-    )
-    drawing
-    lp
+  match lp with
+  | [] -> drawing
+  | (x,y) :: tl ->
+    let (_,result) =
+      List.fold_left
+        (fun (prev,drawing) (x,y) ->
+           if prev.horizontal = Some true && y <> prev.prevY then
+             let next = { horizontal = Some false ; prevX = x ; prevY = y } in
+             let nd =
+               IntPairMap.update
+                 (prev.prevY,prev.prevX)
+                 (fun _ -> Some '+')
+                 (IntPairMap.update
+                    (y,x)
+                    (fun _ -> Some '|')
+                    drawing
+                 )
+             in
+             (next,nd)
+           else if prev.horizontal = Some false && x <> prev.prevX then
+             let next = { horizontal = Some true ; prevX = x ; prevY = y } in
+             let nd =
+               IntPairMap.update
+                 (prev.prevY,prev.prevX)
+                 (fun _ -> Some '+')
+                 (IntPairMap.update
+                    (y,x)
+                    (fun _ -> Some '-')
+                    drawing
+                 )
+             in
+             (next,nd)
+           else if prev.horizontal = None && prev.prevX != x then
+             let next = { horizontal = Some true ; prevX = x ; prevY = y } in
+             let nd =
+               IntPairMap.update
+                 (prev.prevY,prev.prevX)
+                 (fun _ -> Some '-')
+                 (IntPairMap.update
+                    (y,x)
+                    (fun _ -> Some '-')
+                    drawing
+                 )
+             in
+             (next,nd)
+           else if prev.horizontal = None && prev.prevY != y then
+             let next = { horizontal = Some false ; prevX = x ; prevY = y } in
+             let nd =
+               IntPairMap.update
+                 (prev.prevY,prev.prevX)
+                 (fun _ -> Some '|')
+                 (IntPairMap.update
+                    (y,x)
+                    (fun _ -> Some '|')
+                    drawing
+                 )
+             in
+             (next,nd)
+           else
+             let char = if prev.horizontal = Some true then '-' else '|' in
+             let next = { prev with prevX = x ; prevY = y } in
+             let nd =
+               IntPairMap.update (y,x) (fun _ -> Some char) drawing
+             in
+             (next,nd)
+        )
+        ({ horizontal = None ; prevX = x ; prevY = y },drawing)
+        tl
+    in
+    result
 
 let keyUpDrawMode k dm model =
   if k.keyCode == 16 then
@@ -362,6 +490,35 @@ let keyUpDrawMode k dm model =
     | None -> model
   else
     model
+
+let finishDrawDrag sx sy (drag : mousedown) d model =
+  let originalShape =
+    { left = drag.mx
+    ; top = drag.my
+    ; width = drag.nx - drag.mx - 1
+    ; height = drag.ny - drag.my - 1
+    ; content = [| |]
+    }
+  in
+  let clearedDrawing = clearBox model.drawing (Rectangle originalShape) in
+  { model with
+    drawing =
+      copyBox
+        clearedDrawing
+        { nx = sx ; ny = sy ; mx = d.drawAtX ; my = d.drawAtY }
+        originalShape
+        model
+  ; drawMode =
+      Some
+        { d with
+          dragEnd =
+            Some (NoSelection (drag.nx + sx - d.drawAtX - 1,drag.ny + sy - d.drawAtY - 1))
+        ; drawMouseDown = false
+        ; drawAtX = drag.mx + sx - d.drawAtX
+        ; drawAtY = drag.my + sy - d.drawAtY
+        }
+  ; prev = Some { model with drawMode = None }
+  }
 
 let update model = function
   | NewBox ->
@@ -427,7 +584,9 @@ let update model = function
           ; drawAtY = 0
           ; drawStartX = 0
           ; drawStartY = 0
+          ; drawMouseDown = false
           ; linePath = None
+          ; dragEnd = None
           }
     }
   | BoxMode -> { model with drawMode = None }
@@ -455,21 +614,53 @@ let update model = function
     begin
       let cx = int_of_float @@ (float_of_int x) /. !fontWidth in
       let cy = (int_of_float @@ (float_of_int y) /. !fontHeight) - headerSize in
-      match model.mouseAction with
-      | None -> model
-      | Some (Drag r) -> { model with mouseAction = Some (Drag { r with nx = cx ; ny = cy }) }
-      | Some (Down (px,py)) ->
-        if px == cx && py == cy then
+      match model.drawMode with
+      | Some d ->
+        if d.drawAtX == cx && d.drawAtY == cy then
           model
+        else if d.drawMouseDown then
+          match d.dragEnd with
+          | None ->
+            { model with drawMode = Some { d with dragEnd = Some (NoSelection (cx,cy)) } }
+          | Some (NoSelection (_,_)) ->
+            let _ = Printf.printf "change sel %dx%d\n" cx cy in
+            { model with drawMode = Some { d with dragEnd = Some (NoSelection (cx,cy)) } }
+          | Some (PrevSelection (_,_,rect)) ->
+            let _ = Printf.printf "move sel %dx%d\n" cx cy in
+            { model with drawMode = Some { d with dragEnd = Some (PrevSelection (cx,cy,rect)) } }
         else
-          { model with mouseAction = Some (Drag { mx = px ; my = py ; nx = cx ; ny = cy }) }
+          model
+      | _ ->
+        match model.mouseAction with
+        | None -> model
+        | Some (Drag r) ->
+          { model with mouseAction = Some (Drag { r with nx = cx ; ny = cy }) }
+        | Some (Down (px,py)) ->
+          if px == cx && py == cy then
+            model
+          else
+            { model with mouseAction = Some (Drag { mx = px ; my = py ; nx = cx ; ny = cy }) }
     end
   | MouseMsg MouseUp ->
     begin
-      match model.mouseAction with
-      | None -> model
-      | Some (Down (px,py)) -> finishClick px py { model with mouseAction = None }
-      | Some (Drag r) -> finishDrag r { model with mouseAction = None }
+      let _ = Js.log "mouse up" in
+      match model.drawMode with
+      | Some d ->
+        begin
+          match d.dragEnd with
+          | Some (PrevSelection (sx,sy,drag)) -> finishDrawDrag sx sy drag d model
+          | _ ->
+            { model with
+              drawMode =
+                Some { d with drawMouseDown = false }
+            ; mouseAction = None
+            }
+        end
+      | _ ->
+        match model.mouseAction with
+        | None -> model
+        | Some (Down (px,py)) -> finishClick px py { model with mouseAction = None }
+        | Some (Drag r) -> finishDrag r { model with mouseAction = None }
     end
   | Help -> { model with help = true }
   | NoHelp -> { model with help = false }
@@ -660,8 +851,33 @@ let viewEditBody model =
         ]
     ]
 
+let dragOfDrawMode model =
+  model.drawMode
+  |> Option.map
+    (fun d ->
+       match d.dragEnd with
+       | Some (NoSelection (ex,ey)) ->
+         { mx = min d.drawAtX ex
+         ; my = min d.drawAtY ey
+         ; nx = (max d.drawAtX ex) + 1
+         ; ny = (max d.drawAtY ey) + 1
+         }
+       | Some (PrevSelection (ex,ey,drag)) ->
+         { mx = drag.mx + ex - d.drawAtX
+         ; my = drag.my + ey - d.drawAtY
+         ; nx = drag.nx + ex - d.drawAtX
+         ; ny = drag.ny + ey - d.drawAtY
+         }
+       | _ ->
+         { mx = d.drawAtX
+         ; my = d.drawAtY
+         ; nx = d.drawAtX + 1
+         ; ny = d.drawAtY + 1
+         }
+    )
+
 let drawingCursorDiv model =
-  match model.drawMode with
+  match dragOfDrawMode model with
   | None ->
     div
       [ id "drawing-cursor"
@@ -670,11 +886,16 @@ let drawingCursorDiv model =
       ; noProp
       ; noProp
       ] []
-  | Some d ->
-    let xloc = Printf.sprintf "%fpx" ((float_of_int d.drawAtX) *. !fontWidth) in
-    let yloc = Printf.sprintf "%fpx" ((float_of_int (d.drawAtY + headerSize)) *. !fontHeight) in
-    let width = Printf.sprintf "%fpx" !fontWidth in
-    let height = Printf.sprintf "%fpx" !fontHeight in
+  | Some drag ->
+    let _ = Js.log drag in
+    let xmin = min drag.mx drag.nx in
+    let ymin = min drag.my drag.ny in
+    let xmax = max drag.mx drag.nx in
+    let ymax = max drag.my drag.ny in
+    let xloc = Printf.sprintf "%fpx" ((float_of_int xmin) *. !fontWidth) in
+    let yloc = Printf.sprintf "%fpx" ((float_of_int (ymin + headerSize)) *. !fontHeight) in
+    let width = Printf.sprintf "%fpx" ((float_of_int (xmax - xmin)) *. !fontWidth) in
+    let height = Printf.sprintf "%fpx" ((float_of_int (ymax - ymin)) *. !fontHeight) in
     div
       [ id "drawing-cursor"
       ; classList [("drawing-cursor",true)]
@@ -733,10 +954,7 @@ let view model =
         [ div [ id "ruler" ; classList [ ("dwg-row",true) ] ] [ text @@ ruler () ]
         ]
     ; div
-        [ onMouseDown (moveMouse (fun p -> MouseDown p))
-        ; onMouseMove (moveMouse (fun p -> MouseMove p))
-        ; onMouseUp upMouse
-        ]
+        []
         (
           rendered_show
           |> Array.map (fun t -> pre [ classList [("dwg-row",true)] ] [ text t ])
@@ -744,6 +962,12 @@ let view model =
         )
     ; drawingCursorDiv model
     ; showHelp model
+    ; div
+        [ id "mousecover"
+        ; onMouseDown (moveMouse (fun p -> MouseDown p))
+        ; onMouseMove (moveMouse (fun p -> MouseMove p))
+        ; onMouseUp upMouse
+        ] []
     ; div
         [ id "edit" ; classList [ ("edit-active", model.editing <> None) ; ("edit-hidden", model.editing = None) ] ]
         (viewEditBody model)
