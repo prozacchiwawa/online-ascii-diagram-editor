@@ -389,7 +389,12 @@ let keyDownDrawMode k d model =
       }
     else
       model
-
+  | Some ' ' ->
+    { model with
+      drawing = IntPairMap.remove (d.drawAtY, d.drawAtX) model.drawing
+    ; drawMode = Some { d with drawAtX = d.drawAtX + 1 }
+    ; prev = Some { model with drawMode = None }
+    }
   | Some ch ->
     let code = Char.code ch in
     if code >= 0x20 && code < 0x7f then
