@@ -1,4 +1,5 @@
 open Contypes
+open Event
 open Msg
 open Tea.Html
 
@@ -18,18 +19,15 @@ let getPagePos ev =
          )
     )
 
-external stopPropagation : Js.Json.t -> unit = "stopPropagation" [@@bs.send]
-external preventDefault : Js.Json.t -> unit = "preventDefault" [@@bs.send]
-
 let moveMouse f ev =
   let _ = preventDefault ev in
   let _ = stopPropagation ev in
   getPagePos ev
-  |> Option.map (fun (x,y) -> WinMsg (f (x,y)))
+  |> Option.map (fun (x,y) -> MouseMsg (f (x,y)))
 
 let upMouse ev =
   let _ = stopPropagation ev in
-  Some (WinMsg MouseUp)
+  Some (MouseMsg MouseUp)
 
 let onMouseDown fn = onCB "mousedown" "md" (fun ev -> fn (Obj.magic ev))
 let onMouseMove fn = onCB "mousemove" "mm" (fun ev -> fn (Obj.magic ev))

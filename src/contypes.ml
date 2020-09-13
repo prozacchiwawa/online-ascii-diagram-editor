@@ -45,3 +45,18 @@ let rec catOptions = function
   | [] -> []
   | None :: tl -> catOptions tl
   | (Some a) :: tl -> a :: catOptions tl
+
+let rec range a b =
+  if a < b then
+    a :: (range (a+1) b)
+  else
+    []
+
+let padTo n s =
+  let sl = String.length s in
+  if sl < n then
+    let defecit = n - sl in
+    let padding = String.make defecit ' ' in
+    s ^ padding
+  else
+    s
