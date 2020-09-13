@@ -1,5 +1,7 @@
 # online ascii diagram editor
 
+[Try It](https://superheterodyne.net/files/picmode/)
+
 ![screenshot](https://raw.githubusercontent.com/prozacchiwawa/online-ascii-diagram-editor/base/screenshot.png)
 
 An experiment in making an editor that has the features I use from emacs' picture mode.
