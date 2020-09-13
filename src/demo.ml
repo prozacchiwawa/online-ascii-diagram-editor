@@ -67,6 +67,7 @@ type state =
   ; selectedForTyping : int
   ; editing : edit option
   ; drawMode : draw option
+  ; help : bool
   ; prev : state option
   }
 
@@ -235,6 +236,25 @@ let rec findPositionForBox x y box model =
 let drawMouseDown cx cy dm model =
   { model with drawMode = Some { dm with drawAtX = cx ; drawAtY = cy ; drawStartX = cx ; drawStartY = cy } }
 
+let rec removeUntilMatch elt = function
+  | [] -> None
+  | hd :: tl ->
+    match removeUntilMatch elt tl with
+    | Some tl2 -> Some tl2
+    | None ->
+      if hd = elt then
+        Some tl
+      else
+        None
+
+let cursorMovePath nx ny cx cy path =
+  match path with
+  | [] -> [(nx,ny);(cx,cy)]
+  | lst ->
+    match removeUntilMatch (nx,ny) lst with
+    | Some prev -> (nx,ny)::prev
+    | _ -> (nx,ny)::path
+
 let keyDownDrawMode k d model =
   let keyChar =
     if String.length k.key == 1 then
@@ -255,19 +275,51 @@ let keyDownDrawMode k d model =
       }
     else if k.keyCode == 37 then
       { model with
-        drawMode = Some { d with drawAtX = max 0 (d.drawAtX - 1) }
+        drawMode =
+          Some
+            { d with
+              drawAtX = max 0 (d.drawAtX - 1)
+            ; linePath =
+                d.linePath
+                |> Option.map (cursorMovePath (d.drawAtX - 1) d.drawAtY d.drawAtX d.drawAtY)
+            }
       }
     else if k.keyCode == 38 then
       { model with
-        drawMode = Some { d with drawAtY = max 0 (d.drawAtY - 1) }
+        drawMode =
+          Some
+            { d with
+              drawAtY = max 0 (d.drawAtY - 1)
+            ; linePath =
+                d.linePath
+                |> Option.map (cursorMovePath d.drawAtX (d.drawAtY - 1) d.drawAtX d.drawAtY)
+            }
       }
     else if k.keyCode == 39 then
       { model with
-        drawMode = Some { d with drawAtX = d.drawAtX + 1 }
+        drawMode =
+          Some
+            { d with
+              drawAtX = d.drawAtX + 1
+            ; linePath =
+                d.linePath
+                |> Option.map (cursorMovePath (d.drawAtX + 1) d.drawAtY d.drawAtX d.drawAtY)
+            }
       }
     else if k.keyCode == 40 then
       { model with
-        drawMode = Some { d with drawAtY = d.drawAtY + 1 }
+        drawMode =
+          Some
+            { d with
+              drawAtY = d.drawAtY + 1
+            ; linePath =
+                d.linePath
+                |> Option.map (cursorMovePath d.drawAtX (d.drawAtY + 1) d.drawAtX d.drawAtY)
+            }
+      }
+    else if k.keyCode == 16 then
+      { model with
+        drawMode = Some { d with linePath = Some [] }
       }
     else
       model
@@ -286,6 +338,30 @@ let keyDownDrawMode k d model =
       }
     else
       model
+
+let renderLinePath lp drawing =
+  List.fold_left
+    (fun drawing (x,y) ->
+       IntPairMap.update
+         (y,x)
+         (fun _ -> Some '*')
+         drawing
+    )
+    drawing
+    lp
+
+let keyUpDrawMode k dm model =
+  if k.keyCode == 16 then
+    match dm.linePath with
+    | Some lp ->
+      { model with
+        drawMode = Some { dm with linePath = None }
+      ; drawing = renderLinePath lp model.drawing
+      ; prev = Some { model with drawMode = None }
+      }
+    | None -> model
+  else
+    model
 
 let update model = function
   | NewBox ->
@@ -361,6 +437,12 @@ let update model = function
       | Some d -> keyDownDrawMode k d model
       | _ -> model
     end
+  | KeyMsg (KeyUp k) ->
+    begin
+      match model.drawMode with
+      | Some d -> keyUpDrawMode k d model
+      | _ -> model
+    end
   | MouseMsg (MouseDown (x,y)) ->
     begin
       let cx = int_of_float @@ (float_of_int x) /. !fontWidth in
@@ -389,6 +471,8 @@ let update model = function
       | Some (Down (px,py)) -> finishClick px py { model with mouseAction = None }
       | Some (Drag r) -> finishDrag r { model with mouseAction = None }
     end
+  | Help -> { model with help = true }
+  | NoHelp -> { model with help = false }
   | _ -> model
 
 let applyShape model i s = function
@@ -462,6 +546,11 @@ let applyLines strings lmap =
     )
     strings
 
+let applyPath model =
+  match model.drawMode |> Option.bind (fun d -> d.linePath) with
+  | Some lp -> renderLinePath lp model.drawing
+  | _ -> model.drawing
+
 let applyDrawing drawing strings =
   drawing
   |> IntPairMap.bindings
@@ -500,7 +589,7 @@ let rerender model' =
            |> List.fold_left (applyShape model i) ""
         )
       |> Array.of_list
-      |> applyDrawing model.drawing
+      |> applyDrawing (applyPath model)
   }
 
 let measureRuler () =
@@ -550,6 +639,7 @@ let init () =
   ; editing = None
   ; drawMode = None
   ; prev = None
+  ; help = false
   }
   |> rerender
 
@@ -599,6 +689,8 @@ let controlsDiv model =
     div [ id "controls" ]
       [ text "controls"
       ; div [ classList [("control", true)] ; onClick BoxMode ] [ text "[ -> box mode ]" ]
+      ; div [ classList [("control-spacer",true)] ] []
+      ; div [ classList [("control", true)] ; onClick Help ] [ text "[ help ]" ]
       ]
   | _ ->
     div [ id "controls" ]
@@ -608,7 +700,23 @@ let controlsDiv model =
       ; div [ classList [("control", true)] ; onClick (DelBox model.selectedForTyping) ] [ text "[ delete box ]" ]
       ; div [ classList [("control", true)] ; onClick (Edit model.selectedForTyping) ] [ text "[ edit ]" ]
       ; div [ classList [("control", true)] ; onClick Undo ] [ text "[ undo ]" ]
+      ; div [ classList [("control-spacer",true)] ] []
+      ; div [ classList [("control", true)] ; onClick Help ] [ text "[ help ]" ]
       ]
+
+let showHelp model =
+  div
+    [ classList
+        [ ("help-container", model.help)
+        ; ("hidden-help-container", not model.help)
+        ]
+    ]
+    [ iframe [ classList [("help-frame",true)] ; src "./help.html" ] []
+    ; div [ classList [("edit-control-bar",true)] ]
+        [ div [ classList [("control-spacer",true)] ] []
+        ; div [ classList [("control",true)] ; onClick NoHelp ] [ text "[ Ok ]" ]
+        ]
+    ]
 
 let view model =
   let rendered_show = (* Add a few lines *)
@@ -635,6 +743,7 @@ let view model =
           |> Array.to_list
         )
     ; drawingCursorDiv model
+    ; showHelp model
     ; div
         [ id "edit" ; classList [ ("edit-active", model.editing <> None) ; ("edit-hidden", model.editing = None) ] ]
         (viewEditBody model)

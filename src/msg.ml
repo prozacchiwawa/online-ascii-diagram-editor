@@ -25,4 +25,6 @@ type msg =
   | CancelEdit
   | ChangeText of (int * string)
   | UseEdit of (int * string)
+  | Help
+  | NoHelp
 [@@bs.deriving {accessors}]
